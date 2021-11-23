@@ -1,5 +1,4 @@
 module GadgetronExamples
 
-# Write your package code here.
-
+include("recon_acquisitions.jl")
 end

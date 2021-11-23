@@ -1,6 +1,4 @@
 using FFTW
-using Maybe
-using Maybe.Extras
 using Gadgetron
 using Gadgetron.MRD
 using Gadgetron.Stream
@@ -125,8 +123,3 @@ function reconstruct_acquisitions(connection)
         close(connection)
     end
 end
-
-#println("Were ready for connecting")
-#connection = listen(18000)
-#reconstruct_acquisitions(connection)
-#close(connection)
