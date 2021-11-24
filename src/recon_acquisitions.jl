@@ -2,30 +2,33 @@ using FFTW
 using Gadgetron
 using Gadgetron.MRD
 using Gadgetron.Stream
+using Gadgetron.Default 
 using PartialFunctions
 using LinearAlgebra
 using Setfield
 
+fft_scaling(xsize,dims=[1]) = sqrt(reduce((*),map(d->xsize[d],dims)))
 
-function cfft(x, dims=[1])
-    ifftshift(fft(fftshift(x,dims)))
-end
+ortho_fft(x,dims=[1]) = fft(x,dims) ./ Float32(fft_scaling(size(x),dims))
 
-function cifft(x, dims=[1])
-    fftshift(ifft(ifftshift(x,dims)))
-end
+ortho_ifft(x,dims=[1]) = bfft(x,dims) ./ Float32(fft_scaling(size(x),dims))
 
+cfft(x, dims=[1]) = ifftshift(ortho_fft(fftshift(x,dims),dims),dims)
+
+
+cifft(x, dims=[1]) = fftshift(ortho_ifft(ifftshift(x,dims),dims),dims)
 
 
 function noise_adjustment(header::MRDHeader, noise_acq::Acquisition)
 
 
-    noise_bandwidth = header.acquisitionSystemInformation.relativeReceiverNoiseBandwidth #|>   defaultto(0.793f0)
+    noise_bandwidth = header.acquisitionSystemInformation.relativeReceiverNoiseBandwidth |>   default(0.793f0)
 
 
-    whitening_transform(noise::Array{ComplexF32,2}) =
-        1.0 / (size(noise)[2] - 1) * Hermitian(Matrix(noise_acq.data')*adjoint(Matrix(noise_acq.data'))) |> cholesky |> inv
-    apply_whitening = identity
+    function whitening_transform(noise::Array{ComplexF32,2}) 
+        mat = Float32(1.0 / (size(noise)[1] - 1)) * Hermitian(adjoint(noise)*noise)
+        cholesky(mat).U |> inv
+    end
 
     whitening_matrix = whitening_transform(noise_acq.data)
     noise_dwell_time = noise_acq.header.sample_time_us
@@ -39,7 +42,7 @@ function noise_adjustment(header::MRDHeader, noise_acq::Acquisition)
         acq.trajectory,
     )
 
-    return Map(apply_whitening; spawn=true, buffer_size=1280)
+    return Map(apply_whitening; spawn=true, buffer_size=Inf)
 end
 
 
@@ -63,7 +66,7 @@ function remove_oversampling(header::MRDHeader)
         return acq
     end
 
-    return Map(crop_acquisition; spawn=true, buffer_size=1280)
+    return Map(crop_acquisition; spawn=true, buffer_size=Inf)
 
 end
 
@@ -91,10 +94,9 @@ function reconstruct_image(header::MRDHeader)
 
 	recon(x) = cifft(x,[1,2,3]) 
     coil_combine(x) = sqrt.(sum(abs2,x,dims=4))
-	#coil_combine(x::Array{ComplexF32,4}) = mapslices(norm, x, dims=4)
 
 	inner(index, reference::AcquisitionHeader, buffer) =   Image(ImageHeader(reference; image_index=index, image_type = MRD.ImageType.magnitude, field_of_view=fov),  coil_combine(recon(buffer)))
-    inner_splat(args ) = inner(args[1],args[2]...)
+    inner_splat(args ) = inner(args[1],args[2][1],args[2][2])
 	return Map(inner_splat)
 end
 
@@ -102,14 +104,15 @@ end
 
 
 function reconstruct_acquisitions(connection)
-    try 
     start = time()
     header = connection.header
     noise_data = connection |>
        TakeWhile(acq -> :is_noise_measurement ∈ acq.header.flags) |> collect |> last 
     noise_whitener = noise_adjustment(header, noise_data)
 
-    connection |> noise_whitener |>
+
+
+    connection |>  noise_whitener |>
     remove_oversampling(header) |>
     SplitBy(acq -> :last_in_slice ∈ acq.header.flags, keepend = true) |>
     make_kspace(header) |>
@@ -118,8 +121,5 @@ function reconstruct_acquisitions(connection)
     push! $ connection
 
     tot_time = time()-start
-    println("Total recon time $tot_time")
-    finally
-        close(connection)
-    end
+    @info "Total recon time $tot_time"
 end
