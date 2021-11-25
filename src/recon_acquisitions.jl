@@ -100,9 +100,6 @@ function reconstruct_image(header::MRDHeader)
 	return Map(inner_splat)
 end
 
-
-
-
 function reconstruct_acquisitions(connection)
     start = time()
     header = connection.header
@@ -123,3 +120,5 @@ function reconstruct_acquisitions(connection)
     tot_time = time()-start
     @info "Total recon time $tot_time"
 end
+
+Base.precompile(Tuple{typeof(reconstruct_acquisitions),Gadgetron.MRDChannel})   # time: 0.5008968
